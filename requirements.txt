@@ -7,3 +7,6 @@ plaid-python
 python-dotenv
 pydantic
 requests
+
+packaging
+setuptools
