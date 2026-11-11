@@ -2,8 +2,8 @@ fastapi
 uvicorn
 celery
 redis
-psycopg2-binary
 stripe
 plaid-python
 python-dotenv
+pydantic
 requests
