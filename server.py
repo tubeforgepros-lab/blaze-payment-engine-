@@ -85,3 +85,39 @@ async def handle_stripe_webhook(request: Request):
         raise HTTPException(status_code=500, detail=str(err))
     finally:
         conn.close()
+
+@app.post("/v1/payments/onboard-and-payout")
+async def onboard_and_payout(payload: PlaidOnboardRequest, background_tasks: BackgroundTasks):
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Transaction amount must be greater than $0.00.")
+    tok = f"access-sandbox-{payload.public_token.split('-')[-1]}"
+    if os.getenv("CELERY_BROKER_URL"):
+        t = dispatch_autonomous_payout.delay(agent_job_id=payload.agent_job_id, account_token=tok, routing_token="rtg_stripe_rail_222", amount=payload.amount)
+        return {"status": "QUEUED", "mode": "celery", "background_task_id": t.id}
+    background_tasks.add_task(dispatch_autonomous_payout, agent_job_id=payload.agent_job_id, account_token=tok, routing_token="rtg_stripe_rail_222", amount=payload.amount)
+    return {"status": "QUEUED", "mode": "cloud_async", "agent_job_id": payload.agent_job_id}
+
+@app.post("/v1/webhooks/stripe")
+async def handle_stripe_webhook(request: Request):
+    raw_body = await request.body()
+    sig = request.headers.get("stripe-signature")
+    event = stripe.Webhook.construct_event(raw_body, sig, WEBHOOK_SECRET) if WEBHOOK_SECRET else await request.json()
+    etype = event.get("type")
+    obj = event.get("data", {}).get("object", {})
+    pid, amt, code = obj.get("id", ""), obj.get("amount", 0) / 100.0, obj.get("failure_code", "UNKNOWN")
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        if etype == "payout.failed":
+            c.execute("BEGIN TRANSACTION;")
+            c.execute("UPDATE native_ledger SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE account_id = 'pool_01';", (amt,))
+            c.execute("UPDATE track_ledger SET status = ? WHERE job_id LIKE ?;", (f"FAILED_BOUNCED ({code})", f"%{pid}%"))
+            conn.commit()
+            return {"status": "REVERSED", "payout_id": pid, "refunded": amt}
+        elif etype == "payout.paid":
+            c.execute("UPDATE track_ledger SET status = 'FINAL_SETTLED' WHERE job_id LIKE ?;", (f"%{pid}%",))
+            conn.commit()
+            return {"status": "FINAL_SETTLED", "payout_id": pid}
+        return {"status": "IGNORED", "event_type": etype}
+    finally:
+        conn.close()
