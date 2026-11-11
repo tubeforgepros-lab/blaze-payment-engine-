@@ -60,15 +60,15 @@ def update_ledger_settled_status(job_id: str, bank_tx_id: str):
 @app.task(bind=True, max_retries=3, default_retry_delay=60)
 def dispatch_autonomous_payout(self, agent_job_id: str, account_token: str, routing_token: str, amount: float):
     lock_key = f"lock:payout:{agent_job_id}"
-    if not redis_client.set(lock_key, "PROCESSING", ex=86400, nx=True):
+    if os.getenv("REDIS_HOST") and not redis_client.set(lock_key, "PROCESSING", ex=86400, nx=True):
         return {"status": "REJECTED", "reason": "Duplicate agent execution token detected."}
 
     if not verify_external_plaid_balance(account_token, amount):
-        redis_client.delete(lock_key)
+        if os.getenv("REDIS_HOST"): redis_client.delete(lock_key)
         return {"status": "FAILED", "reason": "Pre-flight verification failed."}
 
     if not execute_dual_ledger_commit(agent_job_id, amount):
-        redis_client.delete(lock_key)
+        if os.getenv("REDIS_HOST"): redis_client.delete(lock_key)
         return {"status": "FAILED", "reason": "Ledger adjustment transaction rejected."}
 
     try:
@@ -80,11 +80,11 @@ def dispatch_autonomous_payout(self, agent_job_id: str, account_token: str, rout
         )
         bank_tx_id = payout.id
         update_ledger_settled_status(agent_job_id, bank_tx_id)
-        redis_client.set(lock_key, "COMPLETED", ex=86400)
+        if os.getenv("REDIS_HOST"): redis_client.set(lock_key, "COMPLETED", ex=86400)
         return {"status": "SETTLED", "transaction_id": bank_tx_id}
     except Exception as exc:
         err_msg = getattr(exc, "user_message", None) or str(exc)
         print(f"[STRIPE DISPATCH FAILED] Rolling back ledger: {err_msg}")
         rollback_dual_ledger(agent_job_id, amount, err_msg)
-        redis_client.set(lock_key, "FAILED", ex=3600)
+        if os.getenv("REDIS_HOST"): redis_client.set(lock_key, "FAILED", ex=3600)
         return {"status": "FAILED", "reason": err_msg}
