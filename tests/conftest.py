@@ -35,6 +35,7 @@ def client():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM track_ledger;")
     conn.execute("DELETE FROM webhook_events;")
+    conn.execute("DELETE FROM plaid_items;")
     conn.execute("UPDATE native_ledger SET balance = 1000.00 WHERE account_id = 'pool_01';")
     conn.commit()
     conn.close()

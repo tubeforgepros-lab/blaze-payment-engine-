@@ -2,13 +2,15 @@ import os
 import sqlite3
 import traceback
 
-import stripe
 from celery import Celery
 from dotenv import load_dotenv
 
+import plaid_service
+import stripe_service
+
 load_dotenv()
 
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+stripe_service.configure()
 
 DB_PATH = os.getenv(
     "BLAZE_DB_PATH",
@@ -59,43 +61,22 @@ def verify_external_plaid_balance(access_token: str, required_amount: float) -> 
         print("[PLAID AUDIT] WARNING: verification bypassed (BLAZE_ALLOW_UNVERIFIED_PLAID).")
         return True
 
-    client_id = os.getenv("PLAID_CLIENT_ID")
-    secret = os.getenv("PLAID_SECRET")
-    if not client_id or not secret:
+    if not plaid_service.is_configured():
         print("[PLAID AUDIT] FAIL: PLAID_CLIENT_ID / PLAID_SECRET not configured.")
         return False
 
     try:
-        import plaid
-        from plaid.api import plaid_api
-        from plaid.api_client import ApiClient
-        from plaid.configuration import Configuration
-        from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
-
-        env = (os.getenv("PLAID_ENV", "sandbox") or "sandbox").lower()
-        host = {
-            "sandbox": plaid.Environment.Sandbox,
-            "production": plaid.Environment.Production,
-        }.get(env)
-        if host is None:
-            print(f"[PLAID AUDIT] FAIL: unsupported PLAID_ENV={env!r}.")
-            return False
-
-        api = plaid_api.PlaidApi(
-            ApiClient(Configuration(host=host, api_key={"clientId": client_id, "secret": secret}))
-        )
-        resp = api.accounts_balance_get(AccountsBalanceGetRequest(access_token=access_token))
-        available = sum(
-            (a.balances.available or 0.0)
-            for a in resp["accounts"]
-            if (a.balances.iso_currency_code or "USD") == "USD"
-        )
+        result = plaid_service.get_balances(access_token)
+        available = result["available_total"]
         ok = available >= required_amount
         print(
             f"[PLAID AUDIT] available=${available:,.2f} required=${required_amount:,.2f} "
             f"-> {'PASS' if ok else 'FAIL'}"
         )
         return ok
+    except plaid_service.PlaidServiceError as exc:
+        print(f"[PLAID AUDIT] FAIL: {exc.code}: {exc.message}")
+        return False
     except Exception as exc:  # noqa: BLE001 - any Plaid error must block the payout
         print(f"[PLAID AUDIT] FAIL: Plaid lookup error: {exc}")
         return False
@@ -232,18 +213,17 @@ def dispatch_autonomous_payout(self, agent_job_id: str, account_token: str, rout
 
     try:
         print(f"[BANK DISPATCH] Executing Stripe payout of ${amount:.2f} for Job {agent_job_id}...")
-        payout = stripe.Payout.create(
-            amount=int(round(amount * 100)),
-            currency="usd",
-            metadata={"agent_job_id": agent_job_id},
+        payout = stripe_service.create_payout(
+            amount=amount,
+            agent_job_id=agent_job_id,
             idempotency_key=f"payout-{agent_job_id}",
         )
-        update_ledger_settled_status(agent_job_id, payout.id)
+        update_ledger_settled_status(agent_job_id, payout["id"])
         if r is not None:
             r.set(lock_key, "COMPLETED", ex=86400)
-        return {"status": "SETTLED", "transaction_id": payout.id}
+        return {"status": "SETTLED", "transaction_id": payout["id"]}
     except Exception as exc:  # noqa: BLE001
-        err_msg = getattr(exc, "user_message", None) or str(exc)
+        err_msg = getattr(exc, "message", None) or getattr(exc, "user_message", None) or str(exc)
         print(f"[STRIPE DISPATCH FAILED] Rolling back ledger: {err_msg}")
         rollback_dual_ledger(agent_job_id, amount, err_msg)
         if r is not None:

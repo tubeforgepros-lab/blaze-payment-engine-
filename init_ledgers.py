@@ -55,6 +55,26 @@ def setup_database(db_path: str = DB_PATH) -> None:
         """
     )
 
+    # 4. Linked Plaid items. access_token is stored encrypted when
+    #    BLAZE_TOKEN_ENCRYPTION_KEY is configured (see token_vault.py).
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS plaid_items (
+            item_id TEXT PRIMARY KEY,
+            access_token TEXT NOT NULL,
+            institution_id TEXT,
+            institution_name TEXT,
+            account_id TEXT,
+            account_mask TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_plaid_items_account ON plaid_items(account_id);"
+    )
+
     # --- Migrations for databases created by older revisions ---
     track_cols = _column_names(conn, "track_ledger")
     if "bank_tx_id" not in track_cols:

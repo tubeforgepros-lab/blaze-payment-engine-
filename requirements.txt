@@ -5,6 +5,7 @@ python-dotenv==1.2.4
 requests==2.34.2
 stripe==17.0.0
 plaid-python==46.0.0
+cryptography==44.0.0
 celery==5.7.0
 redis==8.1.0
 packaging==26.3
