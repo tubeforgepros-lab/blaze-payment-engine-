@@ -4,8 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Blaze Autonomous Gateway</title>
-    <script src="https://plaid.com"></script>
-    <script src="https://jsdelivr.net"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.7.7/dist/axios.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; margin: 0; padding: 20px; display: flex; justify-content: center; }
         .app-card { background: #ffffff; width: 100%; max-width: 400px; padding: 24px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
@@ -17,6 +16,7 @@
         .btn:hover { background: #1d4ed8; }
         .btn-secondary { background: #10b981; }
         .btn-secondary:hover { background: #059669; }
+        .btn:disabled { background: #9ca3af; cursor: not-allowed; }
         .input-group { margin-bottom: 20px; }
         .input-group label { display: block; margin-bottom: 6px; font-size: 14px; color: #4b5563; font-weight: 500; }
         .input-group input { width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
@@ -24,26 +24,33 @@
         .log-item { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 10px; color: #374151; }
         .status-badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
         .settled { background: #d1fae5; color: #065f46; }
+        .failed { background: #fee2e2; color: #991b1b; }
     </style>
+<script src="https://sites.super.myninja.ai/_assets/ninja-daytona-script.js"></script>
 </head>
 <body>
 
 <div class="app-card">
     <h2>Blaze Engine Terminal</h2>
-    
+
     <div class="balance-box">
         <div class="balance-label">Available Book Liquidity</div>
-        <div class="balance-amount" id="ui-balance">$87,999.00</div>
+        <div class="balance-amount" id="ui-balance">&mdash;</div>
     </div>
 
-    <button class="btn" id="link-bank-btn">🔗 Link Target Bank Account</button>
-    
+    <button class="btn" id="link-bank-btn">&#128279; Link Target Bank Account</button>
+
     <div class="input-group">
         <label for="payout-amount">Disbursement Amount ($)</label>
-        <input type="number" id="payout-amount" value="1.00" step="0.01" min="1.00">
+        <input type="number" id="payout-amount" value="1.00" step="0.01" min="0.01">
     </div>
 
-    <button class="btn btn-secondary" id="trigger-payout-btn" disabled>⚡ Execute Cloud Transfer</button>
+    <div class="input-group">
+        <label for="api-key">API Key (X-API-Key)</label>
+        <input type="password" id="api-key" placeholder="Required if server enforces BLAZE_API_KEY">
+    </div>
+
+    <button class="btn btn-secondary" id="trigger-payout-btn" disabled>&#9889; Execute Cloud Transfer</button>
 
     <div class="status-log">
         <div class="balance-label" style="color:#4b5563; margin-bottom:12px;">Live Activity Monitor</div>
@@ -57,48 +64,79 @@
 </div>
 
 <script>
-    // Pointing exactly to your active running Render service subdomain path
-    const RENDER_GATEWAY_URL = "https://onrender.com";
+    // Same-origin by default. Override with <script>window.BLAZE_API_BASE="https://...";</script>
+    const API_BASE = window.BLAZE_API_BASE || "";
 
     let activePublicToken = null;
 
-    // Trigger standard verification simulations on connection click loops
-    const linkButton = document.getElementById('link-bank-btn');
-    linkButton.addEventListener('click', () => {
-        console.log("[PLAID LINK] Booting bank integration wizard window...");
+    function apiKey() {
+        return document.getElementById('api-key').value.trim();
+    }
+
+    function addLog(label, badgeText, badgeClass) {
+        const item = document.createElement('div');
+        item.className = 'log-item';
+        const left = document.createElement('span');
+        left.textContent = label;
+        const right = document.createElement('span');
+        right.className = 'status-badge ' + badgeClass;
+        right.textContent = badgeText;
+        item.appendChild(left);
+        item.appendChild(right);
+        const container = document.getElementById('log-container');
+        container.insertBefore(item, container.firstChild);
+    }
+
+    async function refreshBalance() {
+        try {
+            const { data } = await axios.get(`${API_BASE}/v1/ledger/balances`, { timeout: 10000 });
+            const pool = (data.native_ledger || []).find(a => a.account_id === 'pool_01');
+            document.getElementById('ui-balance').textContent =
+                pool ? `$${Number(pool.balance).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : 'N/A';
+        } catch (err) {
+            console.error('Balance refresh failed', err);
+            document.getElementById('ui-balance').textContent = 'Unavailable';
+        }
+    }
+
+    document.getElementById('link-bank-btn').addEventListener('click', () => {
+        // Placeholder: wire this to Plaid Link + /item/public_token/exchange.
         activePublicToken = "public-sandbox-99887766-5544-aabb-ccdd-123456";
         document.getElementById('trigger-payout-btn').removeAttribute('disabled');
-        linkButton.innerText = "✅ Bank Connected";
-        linkButton.style.background = "#059669";
+        const btn = document.getElementById('link-bank-btn');
+        btn.textContent = "\u2705 Bank Connected";
+        btn.style.background = "#059669";
+        addLog('Bank linked (sandbox token)', 'READY', 'settled');
     });
 
     document.getElementById('trigger-payout-btn').addEventListener('click', async () => {
         const amount = parseFloat(document.getElementById('payout-amount').value);
-        const logContainer = document.getElementById('log-container');
-        const agentJobId = "blaze_ui_run_" + Math.floor(Date.now() / 1000);
-        
-        try {
-            const response = await axios.post(`${RENDER_GATEWAY_URL}/v1/payments/onboard-and-payout`, {
-                agent_job_id: agentJobId,
-                public_token: activePublicToken,
-                amount: amount
-            });
+        if (!activePublicToken) return;
+        if (!(amount > 0)) { alert('Enter an amount greater than $0.00.'); return; }
 
-            const newItem = document.createElement('div');
-            newItem.className = 'log-item';
-            newItem.innerHTML = `<span>Job: ${agentJobId.substring(9)}</span><span class="status-badge settled">QUEUED</span>`;
-            logContainer.insertBefore(newItem, logContainer.firstChild);
-            
-            // Adjust local state numbers seamlessly
-            const currentBalance = parseFloat(document.getElementById('ui-balance').innerText.replace('$', '').replace(',', ''));
-            document.getElementById('ui-balance').innerText = `$${(currentBalance - amount).toLocaleString('en-US', {minimumFractionDigits: 2})}`;
-            
-            alert(`Pipeline Connected!\nStatus: ${response.data.status}\nTask ID: ${response.data.background_task_id}`);
-        } catch (error) {
-            console.error(error);
-            alert("Handshake completed. Server received payload array.");
+        const agentJobId = "blaze_ui_run_" + Date.now();
+        const btn = document.getElementById('trigger-payout-btn');
+        btn.disabled = true;
+
+        try {
+            const { data } = await axios.post(
+                `${API_BASE}/v1/payments/onboard-and-payout`,
+                { agent_job_id: agentJobId, public_token: activePublicToken, amount },
+                { headers: apiKey() ? { 'X-API-Key': apiKey() } : {}, timeout: 15000 }
+            );
+            addLog(`Job: ${agentJobId.slice(-8)}`, data.status || 'QUEUED', 'settled');
+            await refreshBalance();
+        } catch (err) {
+            const detail = err.response?.data?.detail || err.message;
+            addLog(`Job: ${agentJobId.slice(-8)}`, 'FAILED', 'failed');
+            console.error(err);
+            alert(`Request failed: ${detail}`);
+        } finally {
+            btn.disabled = false;
         }
     });
+
+    refreshBalance();
 </script>
 
 </body>

@@ -16,6 +16,7 @@ async def handle_stripe_webhook(request: Request):
             raise HTTPException(status_code=400, detail="Missing Stripe-Signature header.")
         try:
             event = stripe.Webhook.construct_event(raw_body, sig_header, WEBHOOK_SECRET)
+            event = event.to_dict() if hasattr(event, "to_dict") else dict(event)
         except Exception as err:
             raise HTTPException(status_code=400, detail="Invalid signature: " + str(err))
     else:

@@ -1,7 +1,11 @@
 venv/
+.venv/
 env/
 __pycache__/
 *.pyc
 *.db
+*.db-wal
+*.db-shm
 *.sqlite3
 .env
+.pytest_cache/
