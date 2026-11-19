@@ -1,4 +1,5 @@
-import os, redis, sqlite3, traceback, stripe
+import os, redis, traceback, stripe
+from db import get_conn, q, init_db
 from dotenv import load_dotenv
 from celery import Celery
 
@@ -19,17 +20,17 @@ def verify_external_plaid_balance(access_token: str, required_amount: float) -> 
 
 def execute_dual_ledger_commit(job_id: str, amount: float) -> bool:
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_conn()
         cursor = conn.cursor()
-        cursor.execute("BEGIN TRANSACTION;")
-        cursor.execute("SELECT balance FROM native_ledger WHERE account_id = 'pool_01';")
+        cursor.execute(q("BEGIN TRANSACTION;"))
+        cursor.execute(q("SELECT balance FROM native_ledger WHERE account_id = 'pool_01';"))
         row = cursor.fetchone()
         if not row or row[0] < amount:
             print("[LEDGER ERROR] Insufficient internal operational pool allocation.")
             conn.close()
             return False
-        cursor.execute("UPDATE native_ledger SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP WHERE account_id = 'pool_01';", (amount,))
-        cursor.execute("INSERT INTO track_ledger (job_id, amount, status) VALUES (?, ?, 'PENDING_BANK_CLEARING');", (job_id, amount))
+        cursor.execute(q("UPDATE native_ledger SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP WHERE account_id = 'pool_01';"), (amount,))
+        cursor.execute(q("INSERT INTO track_ledger (job_id, amount, status) VALUES (?, ?, 'PENDING_BANK_CLEARING');"), (job_id, amount))
         conn.commit()
         conn.close()
         return True
@@ -38,21 +39,21 @@ def execute_dual_ledger_commit(job_id: str, amount: float) -> bool:
         return False
 
 def rollback_dual_ledger(job_id: str, amount: float, reason: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cursor = conn.cursor()
     try:
-        cursor.execute("BEGIN TRANSACTION;")
-        cursor.execute("UPDATE native_ledger SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE account_id = 'pool_01';", (amount,))
-        cursor.execute("UPDATE track_ledger SET status = ? WHERE job_id = ?;", (f"FAILED_ROLLED_BACK ({reason})", job_id))
+        cursor.execute(q("BEGIN TRANSACTION;"))
+        cursor.execute(q("UPDATE native_ledger SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE account_id = 'pool_01';"), (amount,))
+        cursor.execute(q("UPDATE track_ledger SET status = ? WHERE job_id = ?;"), (f"FAILED_ROLLED_BACK ({reason})", job_id))
         conn.commit()
     finally:
         conn.close()
 
 def update_ledger_settled_status(job_id: str, bank_tx_id: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE track_ledger SET status = 'SETTLED', job_id = ? WHERE job_id = ?;", (f"{job_id} ({bank_tx_id})", job_id))
+        cursor.execute(q("UPDATE track_ledger SET status = 'SETTLED', job_id = ? WHERE job_id = ?;"), (f"{job_id} ({bank_tx_id})", job_id))
         conn.commit()
     finally:
         conn.close()

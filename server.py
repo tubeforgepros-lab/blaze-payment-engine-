@@ -1,10 +1,12 @@
-import os, sqlite3, stripe
+import os, stripe
+from db import get_conn, q, init_db
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
-from tasks import dispatch_autonomous_payout, DB_PATH
+from tasks import dispatch_autonomous_payout
 
 app = FastAPI(title="Blaze Money Engine Ingestion Gateway")
 WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+init_db()
 
 class PlaidOnboardRequest(BaseModel):
     agent_job_id: str
@@ -17,11 +19,11 @@ async def health():
 
 @app.get("/v1/ledger/balances")
 async def get_ledger_balances():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute("SELECT account_id, account_type, balance, updated_at FROM native_ledger;")
+    cursor.execute(q("SELECT account_id, account_type, balance, updated_at FROM native_ledger;"))
     native = [{"account_id": r[0], "type": r[1], "balance": r[2], "updated_at": r[3]} for r in cursor.fetchall()]
-    cursor.execute("SELECT job_id, amount, status, logged_at FROM track_ledger ORDER BY logged_at DESC LIMIT 20;")
+    cursor.execute(q("SELECT job_id, amount, status, logged_at FROM track_ledger ORDER BY logged_at DESC LIMIT 20;"))
     track = [{"job_id": r[0], "amount": r[1], "status": r[2], "logged_at": r[3]} for r in cursor.fetchall()]
     conn.close()
     return {"native_ledger": native, "track_ledger": track}
@@ -66,17 +68,17 @@ async def handle_stripe_webhook(request: Request):
     payout_id = obj.get("id", "")
     amount_dollars = obj.get("amount", 0) / 100.0
     failure_code = obj.get("failure_code", "UNKNOWN_ERROR")
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cursor = conn.cursor()
     try:
         if event_type == "payout.failed":
-            cursor.execute("BEGIN TRANSACTION;")
-            cursor.execute("UPDATE native_ledger SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE account_id = 'pool_01';", (amount_dollars,))
-            cursor.execute("UPDATE track_ledger SET status = ? WHERE job_id LIKE ?;", (f"FAILED_BOUNCED ({failure_code})", f"%{payout_id}%"))
+            cursor.execute(q("BEGIN TRANSACTION;"))
+            cursor.execute(q("UPDATE native_ledger SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE account_id = 'pool_01';"), (amount_dollars,))
+            cursor.execute(q("UPDATE track_ledger SET status = ? WHERE job_id LIKE ?;"), (f"FAILED_BOUNCED ({failure_code})", f"%{payout_id}%"))
             conn.commit()
             return {"status": "REVERSED", "payout_id": payout_id, "refunded_to_pool": amount_dollars}
         elif event_type == "payout.paid":
-            cursor.execute("UPDATE track_ledger SET status = 'FINAL_SETTLED' WHERE job_id LIKE ?;", (f"%{payout_id}%",))
+            cursor.execute(q("UPDATE track_ledger SET status = 'FINAL_SETTLED' WHERE job_id LIKE ?;"), (f"%{payout_id}%",))
             conn.commit()
             return {"status": "FINAL_SETTLED", "payout_id": payout_id}
         return {"status": "IGNORED", "event_type": event_type}
@@ -105,17 +107,17 @@ async def handle_stripe_webhook(request: Request):
     etype = event.get("type")
     obj = event.get("data", {}).get("object", {})
     pid, amt, code = obj.get("id", ""), obj.get("amount", 0) / 100.0, obj.get("failure_code", "UNKNOWN")
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
     try:
         if etype == "payout.failed":
-            c.execute("BEGIN TRANSACTION;")
-            c.execute("UPDATE native_ledger SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE account_id = 'pool_01';", (amt,))
-            c.execute("UPDATE track_ledger SET status = ? WHERE job_id LIKE ?;", (f"FAILED_BOUNCED ({code})", f"%{pid}%"))
+            c.execute(q("BEGIN TRANSACTION;"))
+            c.execute(q("UPDATE native_ledger SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE account_id = 'pool_01';"), (amt,))
+            c.execute(q("UPDATE track_ledger SET status = ? WHERE job_id LIKE ?;"), (f"FAILED_BOUNCED ({code})", f"%{pid}%"))
             conn.commit()
             return {"status": "REVERSED", "payout_id": pid, "refunded": amt}
         elif etype == "payout.paid":
-            c.execute("UPDATE track_ledger SET status = 'FINAL_SETTLED' WHERE job_id LIKE ?;", (f"%{pid}%",))
+            c.execute(q("UPDATE track_ledger SET status = 'FINAL_SETTLED' WHERE job_id LIKE ?;"), (f"%{pid}%",))
             conn.commit()
             return {"status": "FINAL_SETTLED", "payout_id": pid}
         return {"status": "IGNORED", "event_type": etype}

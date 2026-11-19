@@ -10,3 +10,5 @@ requests
 
 packaging
 setuptools
+
+psycopg[binary]
