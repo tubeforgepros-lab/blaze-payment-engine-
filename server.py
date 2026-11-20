@@ -130,3 +130,35 @@ async def get_plaid_accounts():
     from plaid.model.accounts_get_request import AccountsGetRequest
     res = plaid_client.accounts_get(AccountsGetRequest(access_token=os.getenv("PLAID_ACCESS_TOKEN"))).to_dict()
     return [{"name": a["name"], "mask": a["mask"], "subtype": str(a["subtype"]), "PLAID_ACCOUNT_ID": a["account_id"]} for a in res["accounts"]]
+
+@app.get("/v1/plaid/link")
+async def create_plaid_link():
+    try:
+        from tasks import plaid_client
+        from plaid.model.link_token_create_request import LinkTokenCreateRequest
+        from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
+        from plaid.model.products import Products
+        from plaid.model.country_code import CountryCode
+        res = plaid_client.link_token_create(LinkTokenCreateRequest(
+            user=LinkTokenCreateRequestUser(client_user_id="blazepay_admin"),
+            client_name="Blaze Payment Engine",
+            products=[Products("auth")],
+            country_codes=[CountryCode("US")],
+            language="en"
+        )).to_dict()
+        return {"link_token": res["link_token"]}
+    except Exception as e:
+        return {"error": getattr(e, "body", None) or str(e)}
+
+@app.post("/v1/plaid/exchange")
+async def exchange_plaid_token(payload: dict):
+    try:
+        from tasks import plaid_client
+        from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+        from plaid.model.accounts_get_request import AccountsGetRequest
+        ex = plaid_client.item_public_token_exchange(ItemPublicTokenExchangeRequest(public_token=payload["public_token"])).to_dict()
+        at = ex["access_token"]
+        accts = plaid_client.accounts_get(AccountsGetRequest(access_token=at)).to_dict()["accounts"]
+        return {"PLAID_ACCESS_TOKEN": at, "accounts": [{"name": a["name"], "mask": a["mask"], "PLAID_ACCOUNT_ID": a["account_id"]} for a in accts]}
+    except Exception as e:
+        return {"error": getattr(e, "body", None) or str(e)}
