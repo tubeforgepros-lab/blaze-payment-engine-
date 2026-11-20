@@ -30,10 +30,9 @@ def execute_dual_ledger_commit(job_id: str, amount: float) -> bool:
     try:
         conn = get_conn()
         cursor = conn.cursor()
-        cursor.execute(q("BEGIN TRANSACTION;"))
         cursor.execute(q("SELECT balance FROM native_ledger WHERE account_id = 'pool_01';"))
         row = cursor.fetchone()
-        if not row or row < amount:
+        if not row or row[0] < amount:
             conn.close()
             return False
         cursor.execute(q("UPDATE native_ledger SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP WHERE account_id = 'pool_01';"), (amount,))
@@ -49,7 +48,6 @@ def rollback_dual_ledger(job_id: str, amount: float, reason: str):
     conn = get_conn()
     cursor = conn.cursor()
     try:
-        cursor.execute(q("BEGIN TRANSACTION;"))
         cursor.execute(q("UPDATE native_ledger SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE account_id = 'pool_01';"), (amount,))
         cursor.execute(q("UPDATE track_ledger SET status = ? WHERE job_id = ?;"), (f"FAILED_ROLLED_BACK ({reason[:180]})", job_id))
         conn.commit()
