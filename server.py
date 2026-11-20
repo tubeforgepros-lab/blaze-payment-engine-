@@ -123,3 +123,10 @@ async def handle_stripe_webhook(request: Request):
         return {"status": "IGNORED", "event_type": etype}
     finally:
         conn.close()
+
+@app.get("/v1/plaid/accounts")
+async def get_plaid_accounts():
+    from tasks import plaid_client
+    from plaid.model.accounts_get_request import AccountsGetRequest
+    res = plaid_client.accounts_get(AccountsGetRequest(access_token=os.getenv("PLAID_ACCESS_TOKEN"))).to_dict()
+    return [{"name": a["name"], "mask": a["mask"], "subtype": str(a["subtype"]), "PLAID_ACCOUNT_ID": a["account_id"]} for a in res["accounts"]]
