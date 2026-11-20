@@ -162,3 +162,24 @@ async def exchange_plaid_token(payload: dict):
         return {"PLAID_ACCESS_TOKEN": at, "accounts": [{"name": a["name"], "mask": a["mask"], "PLAID_ACCOUNT_ID": a["account_id"]} for a in accts]}
     except Exception as e:
         return {"error": getattr(e, "body", None) or str(e)}
+
+@app.get("/v1/plaid/connect")
+async def connect_plaid_ui():
+    from fastapi.responses import HTMLResponse
+    res = await create_plaid_link()
+    if "link_token" not in res:
+        return HTMLResponse(f"<pre>{res}</pre>", status_code=400)
+    lt = res["link_token"]
+    return HTMLResponse(f"""<!doctype html><html><body style="font-family:sans-serif;padding:2rem">
+    <h3>Blaze Payment Engine — Connect Chase</h3><pre id="out">Opening Plaid Link...</pre>
+    <script src="https://plaid.com"></script>
+    <script>
+    Plaid.create({{
+      token: "{lt}",
+      onSuccess: async (pt) => {{
+        document.getElementById("out").textContent = "Exchanging token...";
+        const r = await fetch("/v1/plaid/exchange", {{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{public_token:pt}})}});
+        document.getElementById("out").textContent = JSON.stringify(await r.json(), null, 2);
+      }}
+    }}).open();
+    </script></body></html>""")
